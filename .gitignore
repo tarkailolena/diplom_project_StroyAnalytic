@@ -1,0 +1,6 @@
+.env 
+*.pkl 
+*.db 
+*.xlsx 
+backup.sql 
+requirements_lock.txt 

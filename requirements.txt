@@ -1,0 +1,13 @@
+aiogram==3.4.1
+sqlalchemy
+psycopg2-binary
+pandas
+openpyxl
+python-dotenv
+openai
+joblib
+scikit-learn
+numpy
+plotly
+streamlit
+matplotlib
