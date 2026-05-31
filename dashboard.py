@@ -11,9 +11,24 @@ import tempfile
 st.set_page_config(layout="wide")
 st.title("📊 Дашборд строительных объектов")
 
-db_host = os.getenv("DB_HOST", "localhost")
-engine = create_engine(f'postgresql://postgres:postgres@{db_host}:5432/stroy_db')
+from pathlib import Path
 
+@st.cache_resource
+def get_engine():
+    """Подключение к БД: PostgreSQL если есть DB_HOST, иначе SQLite."""
+    db_host = os.getenv("DB_HOST")
+    if db_host:
+        # Режим Docker / локальный запуск
+        return create_engine(f'postgresql://postgres:postgres@{db_host}:5432/stroy_db')
+    else:
+        # Режим Streamlit Cloud – используем SQLite файл из репозитория
+        db_path = Path(__file__).parent / "stroy_analytics.db"
+        if not db_path.exists():
+            st.error("❌ Файл базы данных stroy_analytics.db не найден в репозитории.")
+            st.stop()
+        return create_engine(f'sqlite:///{db_path}')
+
+engine = get_engine()
 # Загрузка данных с кэшированием
 
 @st.cache_data
