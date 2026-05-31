@@ -67,7 +67,8 @@ async def start(message: types.Message):
 
 @dp.message(Command("dashboard"))
 async def dashboard_link(message: types.Message):
-    await message.answer("📊 Интерактивный дашборд по ссылке:\nhttp://localhost:8501")
+    # ЗДЕСЬ ЗАМЕНА ССЫЛКИ НА ОБЛАЧНЫЙ ДАШБОРД
+    await message.answer("📊 Интерактивный дашборд по ссылке:\nhttps://diplomprojectstroyanalytic-4ybc87gwgln2ncnvpn6fpn.streamlit.app")
 
 @dp.message(Command("profit"))
 async def profit(message: types.Message):
