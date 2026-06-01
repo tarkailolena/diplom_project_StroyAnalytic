@@ -40,11 +40,9 @@ def plot_waterfall_profit(obj_id):
     revenue_fact = df['contract_price_fact'].iloc[0]
     revenue_change = revenue_fact - revenue_plan
 
-    # Влияние изменения затрат по группам: уменьшение прибыли = -(факт - план)
     df['cost_change'] = df['value_fact'] - df['value_plan']
     df['profit_impact'] = -df['cost_change']
 
-    # Сортируем группы по абсолютному влиянию (положительное – увеличивает прибыль, отрицательное – уменьшает)
     df_pos = df[df['profit_impact'] > 0].copy()
     df_neg = df[df['profit_impact'] < 0].copy()
     df_pos['abs_impact'] = df_pos['profit_impact']
@@ -56,11 +54,9 @@ def plot_waterfall_profit(obj_id):
     groups = df_sorted['group_name'].tolist()
     impacts = df_sorted['profit_impact'].tolist()
 
-    # Формируем данные для Waterfall
     labels = ['Плановая прибыль', 'Изменение выручки'] + groups + ['Фактическая прибыль']
     measures = ['absolute'] + ['relative'] + ['relative'] * len(groups) + ['total']
     values = [profit_plan, revenue_change] + impacts + [profit_fact]
-    # Текстовые метки (в млн руб)
     text = [f"{profit_plan/1e6:.1f} млн", f"{revenue_change/1e6:+.1f} млн"] + \
            [f"{v/1e6:+.1f} млн" for v in impacts] + [f"{profit_fact/1e6:.1f} млн"]
 
@@ -70,8 +66,8 @@ def plot_waterfall_profit(obj_id):
         y=values,
         text=text,
         textposition="outside",
-        decreasing={"marker": {"color": "#2ca02c"}},   # зелёный – положительное влияние
-        increasing={"marker": {"color": "#d62728"}},   # красный – отрицательное влияние
+        decreasing={"marker": {"color": "#2ca02c"}},
+        increasing={"marker": {"color": "#d62728"}},
         connector={"line": {"color": "rgb(63,63,63)"}}
     ))
     fig.update_layout(
@@ -183,7 +179,7 @@ selected_object_global = st.sidebar.selectbox(
     index=0
 )
 
-# ==================== РЕЖИМ ОДНОГО ОБЪЕКТА ====================
+# -------------------- РЕЖИМ ОДНОГО ОБЪЕКТА --------------------
 if selected_object_global != "Не выбран":
     st.info(f"🔍 Детальный анализ: объект **{selected_object_global}**")
     trans = load_object_transactions(selected_object_global)
@@ -201,7 +197,6 @@ if selected_object_global != "Не выбран":
         fig_pie = px.pie(group_sum, values='value_fact', names='group_name', title="Распределение затрат по группам")
         st.plotly_chart(fig_pie, use_container_width=True)
 
-        # Waterfall по группам (план-факт)
         st.subheader("Анализ изменения прибыли (Waterfall)")
         fig_wf, err = plot_waterfall_profit(selected_object_global)
         if fig_wf:
@@ -238,7 +233,7 @@ if selected_object_global != "Не выбран":
         else:
             st.info("Нет положительных кодов затрат для этого объекта.")
 else:
-    # ==================== РЕЖИМ ВСЕХ ОБЪЕКТОВ ====================
+    # -------------------- РЕЖИМ ВСЕХ ОБЪЕКТОВ --------------------
     if selected_clusters:
         filtered_objects = objects[objects['cluster'].isin(selected_clusters)]
         filtered_cost_stats = cost_stats[cost_stats['cluster_simple'].isin(selected_clusters)]
@@ -389,7 +384,9 @@ else:
             )
             st.plotly_chart(fig_corr, use_container_width=True)
             with st.expander("📋 Таблица корреляций"):
-                st.dataframe(corr_matrix.style.background_gradient(cmap='RdBu', axis=None), use_container_width=True)
+                # Если matplotlib не установлен, закомментируйте строку ниже и раскомментируйте следующую
+                st.dataframe(corr_matrix, use_container_width=True)
+                # st.dataframe(corr_matrix.style.background_gradient(cmap='RdBu', axis=None), use_container_width=True)
         else:
             st.info("Недостаточно групп затрат для построения корреляционной матрицы (нужно хотя бы 2 группы).")
     else:
@@ -414,7 +411,7 @@ else:
         else:
             st.info("Кластер объекта не определён, рекомендации недоступны")
 
-# ==================== ПРЕДСКАЗАНИЕ КЛАСТЕРА И ЗАГРУЗКА EXCEL ====================
+# -------------------- ПРЕДСКАЗАНИЕ КЛАСТЕРА (ИСПРАВЛЕННОЕ) --------------------
 st.subheader("🔮 Предсказать кластер для нового объекта")
 
 CLUSTER_PROFILES = {
@@ -446,10 +443,10 @@ with col_btn2:
 
 with st.form("predict_form"):
     st.markdown("**Введите доли затрат (4 признака):**")
-    share_mat = st.slider("Доля материалов", 0.0, 1.0, st.session_state.share_mat, 0.01, key="share_mat_slider")
-    share_office = st.slider("Доля офисных затрат", 0.0, 1.0, st.session_state.share_office, 0.01, key="share_office_slider")
-    share_hours = st.slider("Доля строительных часов", 0.0, 1.0, st.session_state.share_hours, 0.01, key="share_hours_slider")
-    share_sub = st.slider("Доля субподряда", 0.0, 1.0, st.session_state.share_sub, 0.01, key="share_sub_slider")
+    share_mat = st.slider("Доля материалов", 0.0, 1.0, st.session_state.share_mat, 0.01)
+    share_office = st.slider("Доля офисных затрат", 0.0, 1.0, st.session_state.share_office, 0.01)
+    share_hours = st.slider("Доля строительных часов", 0.0, 1.0, st.session_state.share_hours, 0.01)
+    share_sub = st.slider("Доля субподряда", 0.0, 1.0, st.session_state.share_sub, 0.01)
     
     submitted = st.form_submit_button("🔮 Предсказать")
     
@@ -499,6 +496,7 @@ with st.form("predict_form"):
             except Exception as e:
                 st.error(f"Ошибка загрузки модели: {e}")
 
+# -------------------- ЗАГРУЗКА EXCEL --------------------
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
 st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных).")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
