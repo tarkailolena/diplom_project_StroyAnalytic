@@ -384,7 +384,7 @@ else:
             )
             st.plotly_chart(fig_corr, use_container_width=True)
             with st.expander("📋 Таблица корреляций"):
-                # Если matplotlib не установлен, закомментируйте строку ниже и раскомментируйте следующую
+                # Если matplotlib не установлен, используем обычный dataframe
                 st.dataframe(corr_matrix, use_container_width=True)
                 # st.dataframe(corr_matrix.style.background_gradient(cmap='RdBu', axis=None), use_container_width=True)
         else:
@@ -496,9 +496,9 @@ with st.form("predict_form"):
             except Exception as e:
                 st.error(f"Ошибка загрузки модели: {e}")
 
-# -------------------- ЗАГРУЗКА EXCEL --------------------
+# -------------------- ЗАГРУЗКА EXCEL (с выводом выручки, прибыли, рентабельности) --------------------
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
-st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных).")
+st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных). Если есть лист `dim_objects` с колонкой `contract_price_fact`, будут рассчитаны выручка, прибыль и рентабельность.")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
 if uploaded_file is not None:
     with st.spinner("Обработка файла..."):
@@ -507,6 +507,31 @@ if uploaded_file is not None:
             st.error(total_cost)
         else:
             st.success(f"Общая сумма расходов: {total_cost:,.0f} руб.")
+            
+            # ---- Попытка получить выручку, прибыль, рентабельность из dim_objects ----
+            revenue = None
+            profit = None
+            ros = None
+            try:
+                xl = pd.ExcelFile(uploaded_file)
+                if 'dim_objects' in xl.sheet_names:
+                    dim_objects = pd.read_excel(uploaded_file, sheet_name='dim_objects')
+                    dim_objects.columns = dim_objects.columns.str.lower().str.strip()
+                    if 'contract_price_fact' in dim_objects.columns:
+                        revenue = dim_objects['contract_price_fact'].iloc[0]
+                        profit = revenue - total_cost
+                        ros = (profit / total_cost * 100) if total_cost > 0 else 0
+            except:
+                pass
+            
+            if revenue is not None:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("💰 Выручка", f"{revenue:,.0f} ₽")
+                col2.metric("💵 Прибыль", f"{profit:,.0f} ₽")
+                col3.metric("📈 Рентабельность затрат (ROM)", f"{ros:.2f}%")
+                st.divider()
+            # ---- конец добавленного блока ----
+            
             st.subheader("📊 Распределение затрат по группам")
             group_df = pd.DataFrame({
                 'Группа': list(shares.keys()),
