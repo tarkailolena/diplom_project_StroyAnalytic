@@ -12,9 +12,29 @@ from pathlib import Path
 st.set_page_config(layout="wide")
 st.title("📊 Дашборд строительных объектов")
 
+# ---------- WATERFALL ФУНКЦИЯ ----------
+def plot_waterfall(costs_dict, total_cost, title="Каскадная диаграмма затрат по группам"):
+    """Рисует waterfall (горизонтальный) для словаря затрат {группа: сумма}."""
+    categories = list(costs_dict.keys())
+    values = list(costs_dict.values())
+    # Добавляем итоговый столбец
+    categories.append("Итого")
+    values.append(total_cost)
+    measure = ["relative"] * (len(categories)-1) + ["total"]
+    
+    fig = go.Figure(go.Waterfall(
+        name="Затраты", orientation="v", measure=measure,
+        x=categories, y=values,
+        textposition="outside",
+        text=[f"{v:,.0f}" for v in values],
+        connector={"line": {"color": "rgb(63,63,63)"}}
+    ))
+    fig.update_layout(title=title, xaxis_title="Группа затрат", yaxis_title="Сумма (руб)", height=500)
+    return fig
+
+# ---------- ПОДКЛЮЧЕНИЕ К БД (SQLite / PostgreSQL) ----------
 @st.cache_resource
 def get_engine():
-    """Подключение к БД: PostgreSQL если есть DB_HOST, иначе SQLite."""
     db_host = os.getenv("DB_HOST")
     if db_host:
         return create_engine(f'postgresql://postgres:postgres@{db_host}:5432/stroy_db')
@@ -27,6 +47,7 @@ def get_engine():
 
 engine = get_engine()
 
+# ---------- ЗАГРУЗКА ДАННЫХ ----------
 @st.cache_data
 def load_objects():
     objects = pd.read_sql("""
@@ -62,6 +83,7 @@ def load_all_transactions_for_corr():
         JOIN dim_expenses e ON f.expense_id = e.expense_id
     """, engine)
 
+# ---------- ОБРАБОТКА EXCEL ----------
 def process_transactions_file(file):
     """Обрабатывает Excel-файл с листами fact_transactions и dim_expenses"""
     try:
@@ -97,22 +119,38 @@ def process_transactions_file(file):
     except Exception as e:
         return None, None, f"Ошибка обработки файла: {e}"
 
+# ---------- ОСНОВНЫЕ ДАННЫЕ ----------
 objects = load_objects()
 cost_stats = load_cluster_cost_stats()
 all_trans = load_all_transactions_for_corr()
 
+# ---------- БОКОВАЯ ПАНЕЛЬ С ФИЛЬТРАМИ ----------
 st.sidebar.header("Фильтры")
+
+# Фильтр по кластеру
 selected_clusters = st.sidebar.multiselect(
     "Кластер",
     options=sorted(objects['cluster'].dropna().unique()),
     default=[]
 )
+
 if selected_clusters:
     filtered_objects = objects[objects['cluster'].isin(selected_clusters)]
     filtered_cost_stats = cost_stats[cost_stats['cluster_simple'].isin(selected_clusters)]
 else:
     filtered_objects = objects
     filtered_cost_stats = cost_stats
+
+# Глобальный фильтр по объекту (синхронизирован с разделом детального анализа)
+st.sidebar.subheader("🎯 Быстрый выбор объекта")
+available_objects_all = filtered_objects['object_id'].unique()
+selected_object_global = st.sidebar.selectbox(
+    "Выберите объект для детального анализа",
+    options=["Не выбран"] + list(available_objects_all),
+    index=0
+)
+
+# ---------- ОСНОВНАЯ ЧАСТЬ ДАШБОРДА ----------
 
 # 1. Прибыль по объектам
 st.subheader("💰 Прибыль по объектам (факт)")
@@ -164,7 +202,15 @@ else:
 st.subheader("🔍 Детальный анализ объекта")
 available_objects = filtered_objects['object_id'].unique()
 if len(available_objects) > 0:
-    selected_object = st.selectbox("Выберите объект для детального анализа", options=available_objects)
+    # Если в боковой панели выбран конкретный объект, подставляем его в selectbox
+    default_index = 0
+    if selected_object_global != "Не выбран" and selected_object_global in available_objects:
+        default_index = list(available_objects).index(selected_object_global)
+    selected_object = st.selectbox(
+        "Выберите объект для детального анализа",
+        options=available_objects,
+        index=default_index
+    )
     if selected_object:
         obj_row = filtered_objects[filtered_objects['object_id'] == selected_object].iloc[0]
         col1, col2, col3, col4 = st.columns(4)
@@ -175,10 +221,19 @@ if len(available_objects) > 0:
 
         trans = load_object_transactions(selected_object)
         if not trans.empty:
+            # Круговая диаграмма по группам
             group_sum = trans.groupby('group_name')['value_fact'].sum().reset_index()
             fig_pie = px.pie(group_sum, values='value_fact', names='group_name', title="Распределение затрат по группам")
             st.plotly_chart(fig_pie, use_container_width=True)
 
+            # ---------- WATERFALL ДИАГРАММА ----------
+            group_costs = trans.groupby('group_name')['value_fact'].sum().to_dict()
+            total = trans['value_fact'].sum()
+            if group_costs:
+                st.subheader("📉 Каскадная диаграмма затрат по группам (Waterfall)")
+                st.plotly_chart(plot_waterfall(group_costs, total), use_container_width=True)
+
+            # Анализ кодов затрат
             st.subheader(f"📊 Анализ кодов затрат для объекта {selected_object}")
             n = st.slider("Количество кодов для отображения (N)", 1, 20, 10, 1)
             
@@ -283,7 +338,7 @@ if 'selected_object' in locals() and selected_object:
     else:
         st.info("Кластер объекта не определён, рекомендации недоступны")
 
-# 8. Предсказание кластера для нового объекта (исправленное)
+# 8. Предсказание кластера для нового объекта
 st.subheader("🔮 Предсказать кластер для нового объекта")
 
 CLUSTER_PROFILES = {
@@ -354,7 +409,6 @@ with st.form("predict_form"):
             st.dataframe(compare_df, use_container_width=True)
             
             try:
-                # ✅ ИСПРАВЛЕНО: модель загружается из корня, а не из data/
                 model = joblib.load('gradient_boosting_model.pkl')
                 X = [[norm_mat, norm_office, norm_hours, norm_sub]]
                 pred = int(model.predict(X)[0])
@@ -403,7 +457,6 @@ if uploaded_file is not None:
                 norm_sub /= total_norm
             
             try:
-                # ✅ ИСПРАВЛЕНО: модель загружается из корня
                 model = joblib.load('gradient_boosting_model.pkl')
                 X = [[norm_mat, norm_office, norm_hours, norm_sub]]
                 pred = int(model.predict(X)[0])
