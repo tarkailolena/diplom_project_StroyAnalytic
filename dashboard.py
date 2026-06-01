@@ -308,7 +308,7 @@ if 'selected_object' in locals() and selected_object:
     else:
         st.info("Кластер объекта не определён, рекомендации недоступны")
 
-# 8. Предсказание кластера для нового объекта (улучшенное)
+# 8. Предсказание кластера для нового объекта (исправленное)
 st.subheader("🔮 Предсказать кластер для нового объекта")
 
 # Эталонные профили кластеров (из Colab)
@@ -317,31 +317,40 @@ CLUSTER_PROFILES = {
     1: {'материалы': 0.006, 'офисные затраты': 0.000, 'строительные часы': 0.063, 'субподряд': 0.417}
 }
 
-with st.form("predict_form"):
-    st.markdown("**Введите доли затрат (4 признака):**")
-    share_mat = st.slider("Доля материалов", 0.0, 1.0, 0.4, 0.01, key="share_mat")
-    share_office = st.slider("Доля офисных затрат", 0.0, 1.0, 0.1, 0.01, key="share_office")
-    share_hours = st.slider("Доля строительных часов", 0.0, 1.0, 0.3, 0.01, key="share_hours")
-    share_sub = st.slider("Доля субподряда", 0.0, 1.0, 0.2, 0.01, key="share_sub")
-    
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        preset0 = st.form_submit_button("📌 Заполнить профиль кластера 0")
-    with col_btn2:
-        preset1 = st.form_submit_button("📌 Заполнить профиль кластера 1")
-    
-    if preset0:
+# Инициализация переменных сессии (если ещё не созданы)
+if "share_mat" not in st.session_state:
+    st.session_state.share_mat = 0.4
+if "share_office" not in st.session_state:
+    st.session_state.share_office = 0.1
+if "share_hours" not in st.session_state:
+    st.session_state.share_hours = 0.3
+if "share_sub" not in st.session_state:
+    st.session_state.share_sub = 0.2
+
+# Кнопки предустановок (ВНЕ формы, обычные st.button)
+col_btn1, col_btn2 = st.columns(2)
+with col_btn1:
+    if st.button("📌 Заполнить профиль кластера 0"):
         st.session_state.share_mat = CLUSTER_PROFILES[0]['материалы']
         st.session_state.share_office = CLUSTER_PROFILES[0]['офисные затраты']
         st.session_state.share_hours = CLUSTER_PROFILES[0]['строительные часы']
         st.session_state.share_sub = CLUSTER_PROFILES[0]['субподряд']
         st.rerun()
-    if preset1:
+with col_btn2:
+    if st.button("📌 Заполнить профиль кластера 1"):
         st.session_state.share_mat = CLUSTER_PROFILES[1]['материалы']
         st.session_state.share_office = CLUSTER_PROFILES[1]['офисные затраты']
         st.session_state.share_hours = CLUSTER_PROFILES[1]['строительные часы']
         st.session_state.share_sub = CLUSTER_PROFILES[1]['субподряд']
         st.rerun()
+
+# Форма для ввода и предсказания
+with st.form("predict_form"):
+    st.markdown("**Введите доли затрат (4 признака):**")
+    share_mat = st.slider("Доля материалов", 0.0, 1.0, st.session_state.share_mat, 0.01, key="share_mat_slider")
+    share_office = st.slider("Доля офисных затрат", 0.0, 1.0, st.session_state.share_office, 0.01, key="share_office_slider")
+    share_hours = st.slider("Доля строительных часов", 0.0, 1.0, st.session_state.share_hours, 0.01, key="share_hours_slider")
+    share_sub = st.slider("Доля субподряда", 0.0, 1.0, st.session_state.share_sub, 0.01, key="share_sub_slider")
     
     submitted = st.form_submit_button("🔮 Предсказать")
     
