@@ -7,21 +7,18 @@ import os
 import joblib
 import numpy as np
 import tempfile
+from pathlib import Path
 
 st.set_page_config(layout="wide")
 st.title("📊 Дашборд строительных объектов")
-
-from pathlib import Path
 
 @st.cache_resource
 def get_engine():
     """Подключение к БД: PostgreSQL если есть DB_HOST, иначе SQLite."""
     db_host = os.getenv("DB_HOST")
     if db_host:
-        # Режим Docker / локальный запуск
         return create_engine(f'postgresql://postgres:postgres@{db_host}:5432/stroy_db')
     else:
-        # Режим Streamlit Cloud – используем SQLite файл из репозитория
         db_path = Path(__file__).parent / "stroy_analytics.db"
         if not db_path.exists():
             st.error("❌ Файл базы данных stroy_analytics.db не найден в репозитории.")
@@ -29,7 +26,6 @@ def get_engine():
         return create_engine(f'sqlite:///{db_path}')
 
 engine = get_engine()
-# Загрузка данных с кэшированием
 
 @st.cache_data
 def load_objects():
@@ -66,7 +62,6 @@ def load_all_transactions_for_corr():
         JOIN dim_expenses e ON f.expense_id = e.expense_id
     """, engine)
 
-# Функция для расчёта топ-кодов по загруженному Excel (ИСПРАВЛЕНА)
 def process_transactions_file(file):
     """Обрабатывает Excel-файл с листами fact_transactions и dim_expenses"""
     try:
@@ -78,32 +73,21 @@ def process_transactions_file(file):
         expenses['expense_id'] = expenses['expense_id'].astype(str).str.strip()
         fact['value_fact'] = pd.to_numeric(fact['value_fact'], errors='coerce').fillna(0)
         
-        # Удаляем дубликаты expense_id в справочнике, оставляя первое вхождение group_name
         expenses_unique = expenses.drop_duplicates(subset=['expense_id'], keep='first')
-        # Проверка на дубли (опционально, можно раскомментировать)
-        # dups = expenses[expenses.duplicated(subset=['expense_id'], keep=False)]
-        # if not dups.empty:
-        #     st.warning(f"Найдены дубликаты expense_id в dim_expenses: {dups['expense_id'].unique()}")
-        
         total_cost = fact['value_fact'].sum()
         if total_cost == 0:
             return None, None, "Общая сумма расходов равна нулю."
         
-        # Сначала группируем факты по коду (без merge, чтобы избежать дублирования)
         code_totals = fact.groupby('expense_id')['value_fact'].sum().reset_index()
-        # Присоединяем group_name из уникального справочника
         code_summary = code_totals.merge(expenses_unique[['expense_id', 'group_name']], on='expense_id', how='left')
         code_summary['group_name'] = code_summary['group_name'].fillna('Прочие')
         code_summary = code_summary.sort_values('value_fact', ascending=False)
         code_summary['pct'] = code_summary['value_fact'] / total_cost * 100
         
-        # Для группировки по группам тоже используем уникальный справочник
-        # Сначала соединяем факты с уникальным справочником, потом группируем
         fact_with_group = fact.merge(expenses_unique[['expense_id', 'group_name']], on='expense_id', how='left')
         fact_with_group['group_name'] = fact_with_group['group_name'].fillna('Прочие')
         group_totals = fact_with_group.groupby('group_name')['value_fact'].sum().sort_values(ascending=False)
         
-        # Вычисление долей для модели
         needed = ['материалы', 'офисные затраты', 'строительные часы', 'субподряд']
         shares = {}
         for grp in needed:
@@ -113,12 +97,10 @@ def process_transactions_file(file):
     except Exception as e:
         return None, None, f"Ошибка обработки файла: {e}"
 
-# Загрузка основных данных
 objects = load_objects()
 cost_stats = load_cluster_cost_stats()
 all_trans = load_all_transactions_for_corr()
 
-# Боковая панель: фильтры
 st.sidebar.header("Фильтры")
 selected_clusters = st.sidebar.multiselect(
     "Кластер",
@@ -193,12 +175,10 @@ if len(available_objects) > 0:
 
         trans = load_object_transactions(selected_object)
         if not trans.empty:
-            # Круговая диаграмма по группам
             group_sum = trans.groupby('group_name')['value_fact'].sum().reset_index()
             fig_pie = px.pie(group_sum, values='value_fact', names='group_name', title="Распределение затрат по группам")
             st.plotly_chart(fig_pie, use_container_width=True)
 
-            # Блок: топ‑N кодов (наибольшие и наименьшие)
             st.subheader(f"📊 Анализ кодов затрат для объекта {selected_object}")
             n = st.slider("Количество кодов для отображения (N)", 1, 20, 10, 1)
             
@@ -207,7 +187,6 @@ if len(available_objects) > 0:
             total_object_cost = code_sum['value_fact'].sum()
             code_sum['pct'] = code_sum['value_fact'] / total_object_cost * 100
 
-            # Наибольшие N кодов
             top_n = code_sum.head(n).copy()
             st.write(f"**🔻 Топ-{n} самых больших кодов затрат**")
             st.dataframe(
@@ -217,7 +196,6 @@ if len(available_objects) > 0:
                 use_container_width=True
             )
 
-            # Наименьшие положительные N кодов
             positive = code_sum[code_sum['value_fact'] > 0]
             smallest_n = positive.tail(n).sort_values('value_fact', ascending=True).copy()
             if not smallest_n.empty:
@@ -254,7 +232,6 @@ else:
 
 # 6. Тепловая карта корреляций
 st.subheader("📈 Корреляция между группами затрат по выбранному кластеру")
-
 if not all_trans.empty:
     if selected_clusters:
         objects_in_clusters = objects[objects['cluster'].isin(selected_clusters)]['object_id']
@@ -268,11 +245,9 @@ if not all_trans.empty:
         aggfunc='sum', 
         fill_value=0
     )
-    
     if pivot.shape[1] > 1:
-        pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100   # доли в процентах
+        pivot_pct = pivot.div(pivot.sum(axis=1), axis=0) * 100
         corr_matrix = pivot_pct.corr()
-        
         fig_corr = px.imshow(
             corr_matrix, 
             text_auto=True, 
@@ -288,7 +263,7 @@ if not all_trans.empty:
 else:
     st.info("Нет данных для расчёта корреляций.")
 
-# 7. Рекомендации на основе кластера (если выбран объект)
+# 7. Рекомендации на основе кластера
 if 'selected_object' in locals() and selected_object:
     obj_cluster = filtered_objects[filtered_objects['object_id'] == selected_object]['cluster'].values[0]
     if pd.notna(obj_cluster):
@@ -311,13 +286,11 @@ if 'selected_object' in locals() and selected_object:
 # 8. Предсказание кластера для нового объекта (исправленное)
 st.subheader("🔮 Предсказать кластер для нового объекта")
 
-# Эталонные профили кластеров (из Colab)
 CLUSTER_PROFILES = {
     0: {'материалы': 0.308, 'офисные затраты': 0.103, 'строительные часы': 0.122, 'субподряд': 0.299},
     1: {'материалы': 0.006, 'офисные затраты': 0.000, 'строительные часы': 0.063, 'субподряд': 0.417}
 }
 
-# Инициализация переменных сессии (если ещё не созданы)
 if "share_mat" not in st.session_state:
     st.session_state.share_mat = 0.4
 if "share_office" not in st.session_state:
@@ -327,7 +300,6 @@ if "share_hours" not in st.session_state:
 if "share_sub" not in st.session_state:
     st.session_state.share_sub = 0.2
 
-# Кнопки предустановок (ВНЕ формы, обычные st.button)
 col_btn1, col_btn2 = st.columns(2)
 with col_btn1:
     if st.button("📌 Заполнить профиль кластера 0"):
@@ -344,7 +316,6 @@ with col_btn2:
         st.session_state.share_sub = CLUSTER_PROFILES[1]['субподряд']
         st.rerun()
 
-# Форма для ввода и предсказания
 with st.form("predict_form"):
     st.markdown("**Введите доли затрат (4 признака):**")
     share_mat = st.slider("Доля материалов", 0.0, 1.0, st.session_state.share_mat, 0.01, key="share_mat_slider")
@@ -383,7 +354,8 @@ with st.form("predict_form"):
             st.dataframe(compare_df, use_container_width=True)
             
             try:
-                model = joblib.load('data/gradient_boosting_model.pkl')
+                # ✅ ИСПРАВЛЕНО: модель загружается из корня, а не из data/
+                model = joblib.load('gradient_boosting_model.pkl')
                 X = [[norm_mat, norm_office, norm_hours, norm_sub]]
                 pred = int(model.predict(X)[0])
                 try:
@@ -400,7 +372,7 @@ with st.form("predict_form"):
             except Exception as e:
                 st.error(f"Ошибка загрузки модели: {e}")
 
-# 9. Загрузка Excel-файла с транзакциями для анализа и предсказания
+# 9. Загрузка Excel-файла
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
 st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных). Бот сам рассчитает доли, предскажет кластер и покажет топ-кодов затрат.")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
@@ -431,7 +403,8 @@ if uploaded_file is not None:
                 norm_sub /= total_norm
             
             try:
-                model = joblib.load('data/gradient_boosting_model.pkl')
+                # ✅ ИСПРАВЛЕНО: модель загружается из корня
+                model = joblib.load('gradient_boosting_model.pkl')
                 X = [[norm_mat, norm_office, norm_hours, norm_sub]]
                 pred = int(model.predict(X)[0])
                 desc = "собственные работы (>70%)" if pred == 0 else "субподряд и прочие (>50%)"
