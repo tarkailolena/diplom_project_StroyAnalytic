@@ -1,5 +1,5 @@
 .env 
-*.pkl 
+#*.pkl 
 *.db 
 *.xlsx 
 backup.sql 
