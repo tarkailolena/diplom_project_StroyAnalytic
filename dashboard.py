@@ -12,21 +12,74 @@ from pathlib import Path
 st.set_page_config(layout="wide")
 st.title("📊 Дашборд строительных объектов")
 
-def plot_waterfall(costs_dict, total_cost, title="Каскадная диаграмма затрат по группам"):
-    categories = list(costs_dict.keys())
-    values = list(costs_dict.values())
-    categories.append("Итого")
-    values.append(total_cost)
-    measure = ["relative"] * (len(categories)-1) + ["total"]
+def plot_waterfall_profit(obj_id):
+    """
+    Строит Waterfall-диаграмму формирования прибыли для заданного объекта
+    (как в Colab: план прибыли → изменение выручки → влияние изменения затрат по группам → факт прибыли)
+    """
+    query = """
+        SELECT 
+            o.profit_plan, o.profit_fact,
+            o.contract_price_plan, o.contract_price_fact,
+            e.group_name,
+            SUM(f.value_plan) as value_plan,
+            SUM(f.value_fact) as value_fact
+        FROM dim_objects o
+        JOIN fact_transactions f ON o.object_id = f.object_id
+        JOIN dim_expenses e ON f.expense_id = e.expense_id
+        WHERE o.object_id = :obj_id
+        GROUP BY o.profit_plan, o.profit_fact, o.contract_price_plan, o.contract_price_fact, e.group_name
+    """
+    df = pd.read_sql(query, engine, params={"obj_id": obj_id})
+    if df.empty:
+        return None, "Нет данных для построения Waterfall"
+    
+    profit_plan = df['profit_plan'].iloc[0]
+    profit_fact = df['profit_fact'].iloc[0]
+    revenue_plan = df['contract_price_plan'].iloc[0]
+    revenue_fact = df['contract_price_fact'].iloc[0]
+    revenue_change = revenue_fact - revenue_plan
+
+    # Влияние изменения затрат по группам: уменьшение прибыли = -(факт - план)
+    df['cost_change'] = df['value_fact'] - df['value_plan']
+    df['profit_impact'] = -df['cost_change']
+
+    # Сортируем группы по абсолютному влиянию (положительное – увеличивает прибыль, отрицательное – уменьшает)
+    df_pos = df[df['profit_impact'] > 0].copy()
+    df_neg = df[df['profit_impact'] < 0].copy()
+    df_pos['abs_impact'] = df_pos['profit_impact']
+    df_neg['abs_impact'] = df_neg['profit_impact'].abs()
+    df_pos = df_pos.sort_values('abs_impact', ascending=False)
+    df_neg = df_neg.sort_values('abs_impact', ascending=False)
+    df_sorted = pd.concat([df_pos, df_neg], ignore_index=True)
+
+    groups = df_sorted['group_name'].tolist()
+    impacts = df_sorted['profit_impact'].tolist()
+
+    # Формируем данные для Waterfall
+    labels = ['Плановая прибыль', 'Изменение выручки'] + groups + ['Фактическая прибыль']
+    measures = ['absolute'] + ['relative'] + ['relative'] * len(groups) + ['total']
+    values = [profit_plan, revenue_change] + impacts + [profit_fact]
+    # Текстовые метки (в млн руб)
+    text = [f"{profit_plan/1e6:.1f} млн", f"{revenue_change/1e6:+.1f} млн"] + \
+           [f"{v/1e6:+.1f} млн" for v in impacts] + [f"{profit_fact/1e6:.1f} млн"]
+
     fig = go.Figure(go.Waterfall(
-        name="Затраты", orientation="v", measure=measure,
-        x=categories, y=values,
+        x=labels,
+        measure=measures,
+        y=values,
+        text=text,
         textposition="outside",
-        text=[f"{v:,.0f}" for v in values],
+        decreasing={"marker": {"color": "#2ca02c"}},   # зелёный – положительное влияние
+        increasing={"marker": {"color": "#d62728"}},   # красный – отрицательное влияние
         connector={"line": {"color": "rgb(63,63,63)"}}
     ))
-    fig.update_layout(title=title, xaxis_title="Группа затрат", yaxis_title="Сумма (руб)", height=500)
-    return fig
+    fig.update_layout(
+        title=f"Формирование фактической прибыли – объект {obj_id}<br>План: {profit_plan:,.0f} руб. → Факт: {profit_fact:,.0f} руб.",
+        xaxis_title="Фактор изменения", yaxis_title="Изменение (млн руб)",
+        xaxis_tickangle=-45, height=550
+    )
+    return fig, None
 
 @st.cache_resource
 def get_engine():
@@ -36,7 +89,7 @@ def get_engine():
     else:
         db_path = Path(__file__).parent / "stroy_analytics.db"
         if not db_path.exists():
-            st.error("❌ Файл базы данных stroy_analytics.db не найден в репозитории.")
+            st.error("❌ Файл базы данных stroy_analytics.db не найден.")
             st.stop()
         return create_engine(f'sqlite:///{db_path}')
 
@@ -125,14 +178,14 @@ selected_clusters = st.sidebar.multiselect(
 st.sidebar.subheader("Выбор объекта")
 available_objects_all = objects['object_id'].unique()
 selected_object_global = st.sidebar.selectbox(
-    "Объект (переключает дашборд в режим детального анализа)",
+    "Объект (режим детального анализа)",
     options=["Не выбран"] + list(available_objects_all),
     index=0
 )
 
-# ==================== РЕЖИМ ДЕТАЛЬНОГО АНАЛИЗА ОДНОГО ОБЪЕКТА ====================
+# ==================== РЕЖИМ ОДНОГО ОБЪЕКТА ====================
 if selected_object_global != "Не выбран":
-    st.info(f"🔍 Режим детального анализа: объект **{selected_object_global}**")
+    st.info(f"🔍 Детальный анализ: объект **{selected_object_global}**")
     trans = load_object_transactions(selected_object_global)
     if trans.empty:
         st.error("Нет транзакций для выбранного объекта.")
@@ -148,11 +201,13 @@ if selected_object_global != "Не выбран":
         fig_pie = px.pie(group_sum, values='value_fact', names='group_name', title="Распределение затрат по группам")
         st.plotly_chart(fig_pie, use_container_width=True)
 
-        group_costs = trans.groupby('group_name')['value_fact'].sum().to_dict()
-        total = trans['value_fact'].sum()
-        if group_costs:
-            st.subheader("Каскадная диаграмма затрат по группам (Waterfall)")
-            st.plotly_chart(plot_waterfall(group_costs, total), use_container_width=True)
+        # Waterfall по группам (план-факт)
+        st.subheader("Анализ изменения прибыли (Waterfall)")
+        fig_wf, err = plot_waterfall_profit(selected_object_global)
+        if fig_wf:
+            st.plotly_chart(fig_wf, use_container_width=True)
+        else:
+            st.info(err)
 
         st.subheader(f"Анализ кодов затрат для объекта {selected_object_global}")
         n = st.slider("Количество кодов для отображения (N)", 1, 20, 10, 1)
@@ -182,9 +237,8 @@ if selected_object_global != "Не выбран":
             )
         else:
             st.info("Нет положительных кодов затрат для этого объекта.")
-
-# ==================== РЕЖИМ "ВСЕ ОБЪЕКТЫ" ====================
 else:
+    # ==================== РЕЖИМ ВСЕХ ОБЪЕКТОВ ====================
     if selected_clusters:
         filtered_objects = objects[objects['cluster'].isin(selected_clusters)]
         filtered_cost_stats = cost_stats[cost_stats['cluster_simple'].isin(selected_clusters)]
@@ -253,11 +307,12 @@ else:
                 fig_pie = px.pie(group_sum, values='value_fact', names='group_name', title="Распределение затрат по группам")
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-                group_costs = trans.groupby('group_name')['value_fact'].sum().to_dict()
-                total = trans['value_fact'].sum()
-                if group_costs:
-                    st.subheader("Каскадная диаграмма затрат по группам (Waterfall)")
-                    st.plotly_chart(plot_waterfall(group_costs, total), use_container_width=True)
+                st.subheader("Анализ изменения прибыли (Waterfall)")
+                fig_wf, err = plot_waterfall_profit(selected_object)
+                if fig_wf:
+                    st.plotly_chart(fig_wf, use_container_width=True)
+                else:
+                    st.info(err)
 
                 st.subheader(f"Анализ кодов затрат для объекта {selected_object}")
                 n = st.slider("Количество кодов для отображения (N)", 1, 20, 10, 1)
@@ -359,7 +414,7 @@ else:
         else:
             st.info("Кластер объекта не определён, рекомендации недоступны")
 
-# ==================== ПРЕДСКАЗАНИЕ КЛАСТЕРА И ЗАГРУЗКА EXCEL (доступно всегда) ====================
+# ==================== ПРЕДСКАЗАНИЕ КЛАСТЕРА И ЗАГРУЗКА EXCEL ====================
 st.subheader("🔮 Предсказать кластер для нового объекта")
 
 CLUSTER_PROFILES = {
@@ -369,11 +424,8 @@ CLUSTER_PROFILES = {
 
 if "share_mat" not in st.session_state:
     st.session_state.share_mat = 0.4
-if "share_office" not in st.session_state:
     st.session_state.share_office = 0.1
-if "share_hours" not in st.session_state:
     st.session_state.share_hours = 0.3
-if "share_sub" not in st.session_state:
     st.session_state.share_sub = 0.2
 
 col_btn1, col_btn2 = st.columns(2)
@@ -448,7 +500,7 @@ with st.form("predict_form"):
                 st.error(f"Ошибка загрузки модели: {e}")
 
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
-st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных). Бот сам рассчитает доли, предскажет кластер и покажет топ-кодов затрат.")
+st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных).")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
 if uploaded_file is not None:
     with st.spinner("Обработка файла..."):
