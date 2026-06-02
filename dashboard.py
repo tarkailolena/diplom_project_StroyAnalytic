@@ -139,26 +139,29 @@ def process_transactions_file(file):
         expenses_unique = expenses.drop_duplicates(subset=['expense_id'], keep='first')
         total_cost = fact['value_fact'].sum()
         if total_cost == 0:
-            return None, None, "Общая сумма расходов равна нулю."
+            return None, None, None, "Общая сумма расходов равна нулю."
         
+        # Группировка по кодам
         code_totals = fact.groupby('expense_id')['value_fact'].sum().reset_index()
         code_summary = code_totals.merge(expenses_unique[['expense_id', 'group_name']], on='expense_id', how='left')
         code_summary['group_name'] = code_summary['group_name'].fillna('Прочие')
         code_summary = code_summary.sort_values('value_fact', ascending=False)
         code_summary['pct'] = code_summary['value_fact'] / total_cost * 100
         
+        # Группировка по группам (все группы)
         fact_with_group = fact.merge(expenses_unique[['expense_id', 'group_name']], on='expense_id', how='left')
         fact_with_group['group_name'] = fact_with_group['group_name'].fillna('Прочие')
-        group_totals = fact_with_group.groupby('group_name')['value_fact'].sum().sort_values(ascending=False)
+        group_totals_all = fact_with_group.groupby('group_name')['value_fact'].sum().sort_values(ascending=False)
         
+        # Только 4 группы для модели
         needed = ['материалы', 'офисные затраты', 'строительные часы', 'субподряд']
-        shares = {}
+        shares_model = {}
         for grp in needed:
-            shares[grp] = group_totals.get(grp, 0) / total_cost
+            shares_model[grp] = group_totals_all.get(grp, 0) / total_cost
         
-        return shares, code_summary, total_cost
+        return shares_model, code_summary, group_totals_all, total_cost
     except Exception as e:
-        return None, None, f"Ошибка обработки файла: {e}"
+        return None, None, None, f"Ошибка обработки файла: {e}"
 
 # -------------------- ЗАГРУЗКА ОСНОВНЫХ ДАННЫХ --------------------
 objects = load_objects()
@@ -419,14 +422,12 @@ CLUSTER_PROFILES = {
     1: {'материалы': 0.006, 'офисные затраты': 0.000, 'строительные часы': 0.063, 'субподряд': 0.417}
 }
 
-# Инициализация переменных сессии
 if "share_mat" not in st.session_state:
     st.session_state.share_mat = 0.4
     st.session_state.share_office = 0.1
     st.session_state.share_hours = 0.3
     st.session_state.share_sub = 0.2
 
-# Кнопки предустановок (вне формы)
 col_btn1, col_btn2 = st.columns(2)
 with col_btn1:
     if st.button("📌 Заполнить профиль кластера 0"):
@@ -498,14 +499,14 @@ with st.form("predict_form"):
             except Exception as e:
                 st.error(f"Ошибка загрузки модели: {e}")
 
-# -------------------- ЗАГРУЗКА EXCEL (С ДОБАВЛЕННЫМ СРАВНЕНИЕМ) --------------------
+# -------------------- ЗАГРУЗКА EXCEL (СО ВСЕМИ ГРУППАМИ И СРАВНЕНИЕМ) --------------------
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
 st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных).")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
 if uploaded_file is not None:
     with st.spinner("Обработка файла..."):
-        shares, code_summary, total_cost = process_transactions_file(uploaded_file)
-        if shares is None:
+        shares_model, code_summary, group_totals_all, total_cost = process_transactions_file(uploaded_file)
+        if shares_model is None:
             st.error(total_cost)
         else:
             st.success(f"Общая сумма расходов: {total_cost:,.0f} руб.")
@@ -533,18 +534,24 @@ if uploaded_file is not None:
                 col3.metric("📈 Рентабельность затрат (ROM)", f"{ros:.2f}%")
                 st.divider()
             
-            st.subheader("📊 Распределение затрат по группам")
-            group_df = pd.DataFrame({
-                'Группа': list(shares.keys()),
-                'Доля': [shares[k] for k in shares.keys()]
+            st.subheader("📊 Распределение затрат по группам (все группы)")
+            group_df_all = pd.DataFrame({
+                'Группа': group_totals_all.index,
+                'Сумма (руб)': group_totals_all.values,
+                'Доля (%)': (group_totals_all.values / total_cost) * 100
             })
-            fig_groups = px.bar(group_df, x='Группа', y='Доля', title="Доли групп затрат")
-            st.plotly_chart(fig_groups, use_container_width=True)
+            group_df_all = group_df_all.sort_values('Сумма (руб)', ascending=False)
+            st.dataframe(group_df_all, use_container_width=True)
             
-            norm_mat = shares.get('материалы', 0)
-            norm_office = shares.get('офисные затраты', 0)
-            norm_hours = shares.get('строительные часы', 0)
-            norm_sub = shares.get('субподряд', 0)
+            # Также показываем барплот по всем группам
+            fig_all_groups = px.bar(group_df_all, x='Группа', y='Доля (%)', title="Доли групп затрат (все группы)")
+            st.plotly_chart(fig_all_groups, use_container_width=True)
+            
+            # --- Нормировка для модели (только 4 группы) ---
+            norm_mat = shares_model.get('материалы', 0)
+            norm_office = shares_model.get('офисные затраты', 0)
+            norm_hours = shares_model.get('строительные часы', 0)
+            norm_sub = shares_model.get('субподряд', 0)
             total_norm = norm_mat + norm_office + norm_hours + norm_sub
             if total_norm > 0:
                 norm_mat /= total_norm
@@ -553,7 +560,7 @@ if uploaded_file is not None:
                 norm_sub /= total_norm
             
             # --- СРАВНЕНИЕ С ЭТАЛОННЫМИ ПРОФИЛЯМИ ---
-            st.subheader("📊 Сравнение с эталонными профилями кластеров")
+            st.subheader("📊 Сравнение с эталонными профилями кластеров (4 группы)")
             compare_excel_df = pd.DataFrame({
                 'Признак': ['Материалы', 'Офисные затраты', 'Строительные часы', 'Субподряд'],
                 'Из файла': [norm_mat, norm_office, norm_hours, norm_sub],
