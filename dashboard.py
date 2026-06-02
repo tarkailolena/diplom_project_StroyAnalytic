@@ -12,11 +12,8 @@ from pathlib import Path
 st.set_page_config(layout="wide")
 st.title("📊 Дашборд строительных объектов")
 
+# -------------------- ФУНКЦИЯ WATERFALL (ПЛАН-ФАКТ) --------------------
 def plot_waterfall_profit(obj_id):
-    """
-    Строит Waterfall-диаграмму формирования прибыли для заданного объекта
-    (как в Colab: план прибыли → изменение выручки → влияние изменения затрат по группам → факт прибыли)
-    """
     query = """
         SELECT 
             o.profit_plan, o.profit_fact,
@@ -77,6 +74,7 @@ def plot_waterfall_profit(obj_id):
     )
     return fig, None
 
+# -------------------- ПОДКЛЮЧЕНИЕ К БД --------------------
 @st.cache_resource
 def get_engine():
     db_host = os.getenv("DB_HOST")
@@ -91,6 +89,7 @@ def get_engine():
 
 engine = get_engine()
 
+# -------------------- ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ --------------------
 @st.cache_data
 def load_objects():
     objects = pd.read_sql("""
@@ -126,6 +125,7 @@ def load_all_transactions_for_corr():
         JOIN dim_expenses e ON f.expense_id = e.expense_id
     """, engine)
 
+# -------------------- ОБРАБОТКА EXCEL --------------------
 def process_transactions_file(file):
     try:
         fact = pd.read_excel(file, sheet_name='fact_transactions')
@@ -160,10 +160,12 @@ def process_transactions_file(file):
     except Exception as e:
         return None, None, f"Ошибка обработки файла: {e}"
 
+# -------------------- ЗАГРУЗКА ОСНОВНЫХ ДАННЫХ --------------------
 objects = load_objects()
 cost_stats = load_cluster_cost_stats()
 all_trans = load_all_transactions_for_corr()
 
+# -------------------- БОКОВАЯ ПАНЕЛЬ --------------------
 st.sidebar.header("Фильтры")
 selected_clusters = st.sidebar.multiselect(
     "Кластер",
@@ -384,9 +386,7 @@ else:
             )
             st.plotly_chart(fig_corr, use_container_width=True)
             with st.expander("📋 Таблица корреляций"):
-                # Если matplotlib не установлен, используем обычный dataframe
                 st.dataframe(corr_matrix, use_container_width=True)
-                # st.dataframe(corr_matrix.style.background_gradient(cmap='RdBu', axis=None), use_container_width=True)
         else:
             st.info("Недостаточно групп затрат для построения корреляционной матрицы (нужно хотя бы 2 группы).")
     else:
@@ -419,12 +419,14 @@ CLUSTER_PROFILES = {
     1: {'материалы': 0.006, 'офисные затраты': 0.000, 'строительные часы': 0.063, 'субподряд': 0.417}
 }
 
+# Инициализация переменных сессии
 if "share_mat" not in st.session_state:
     st.session_state.share_mat = 0.4
     st.session_state.share_office = 0.1
     st.session_state.share_hours = 0.3
     st.session_state.share_sub = 0.2
 
+# Кнопки предустановок (вне формы)
 col_btn1, col_btn2 = st.columns(2)
 with col_btn1:
     if st.button("📌 Заполнить профиль кластера 0"):
@@ -496,9 +498,9 @@ with st.form("predict_form"):
             except Exception as e:
                 st.error(f"Ошибка загрузки модели: {e}")
 
-# -------------------- ЗАГРУЗКА EXCEL (с выводом выручки, прибыли, рентабельности) --------------------
+# -------------------- ЗАГРУЗКА EXCEL (С ДОБАВЛЕННЫМ СРАВНЕНИЕМ) --------------------
 st.subheader("📁 Анализ нового объекта по Excel-файлу")
-st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных). Если есть лист `dim_objects` с колонкой `contract_price_fact`, будут рассчитаны выручка, прибыль и рентабельность.")
+st.markdown("Загрузите Excel-файл с листами `fact_transactions` и `dim_expenses` (как в исходных данных).")
 uploaded_file = st.file_uploader("Выберите Excel-файл", type=["xlsx", "xls"])
 if uploaded_file is not None:
     with st.spinner("Обработка файла..."):
@@ -508,7 +510,7 @@ if uploaded_file is not None:
         else:
             st.success(f"Общая сумма расходов: {total_cost:,.0f} руб.")
             
-            # ---- Попытка получить выручку, прибыль, рентабельность из dim_objects ----
+            # --- ВЫРУЧКА, ПРИБЫЛЬ (если есть в файле) ---
             revenue = None
             profit = None
             ros = None
@@ -530,7 +532,6 @@ if uploaded_file is not None:
                 col2.metric("💵 Прибыль", f"{profit:,.0f} ₽")
                 col3.metric("📈 Рентабельность затрат (ROM)", f"{ros:.2f}%")
                 st.divider()
-            # ---- конец добавленного блока ----
             
             st.subheader("📊 Распределение затрат по группам")
             group_df = pd.DataFrame({
@@ -550,6 +551,18 @@ if uploaded_file is not None:
                 norm_office /= total_norm
                 norm_hours /= total_norm
                 norm_sub /= total_norm
+            
+            # --- СРАВНЕНИЕ С ЭТАЛОННЫМИ ПРОФИЛЯМИ ---
+            st.subheader("📊 Сравнение с эталонными профилями кластеров")
+            compare_excel_df = pd.DataFrame({
+                'Признак': ['Материалы', 'Офисные затраты', 'Строительные часы', 'Субподряд'],
+                'Из файла': [norm_mat, norm_office, norm_hours, norm_sub],
+                'Среднее по кластеру 0': [CLUSTER_PROFILES[0]['материалы'], CLUSTER_PROFILES[0]['офисные затраты'],
+                                           CLUSTER_PROFILES[0]['строительные часы'], CLUSTER_PROFILES[0]['субподряд']],
+                'Среднее по кластеру 1': [CLUSTER_PROFILES[1]['материалы'], CLUSTER_PROFILES[1]['офисные затраты'],
+                                           CLUSTER_PROFILES[1]['строительные часы'], CLUSTER_PROFILES[1]['субподряд']]
+            })
+            st.dataframe(compare_excel_df, use_container_width=True)
             
             try:
                 model = joblib.load('gradient_boosting_model.pkl')
